@@ -487,7 +487,7 @@ class HSFAUT(nn.Module):
             self.denoisers_conv.append(SFAT(in_dim=35, out_dim=out_channels, dim=n_feat, stage=2, num_blocks=[1, 1, 1]))
 
         self.para_estimator_filter = HyPaNet(in_nc=28, para_nums=1, num_iterations=num_iterations)
-        self.para_estimator_conv = HyPaNet(in_nc=3, para_nums=3, num_iterations=1)  # 1个复数参数
+        self.para_estimator_conv = HyPaNet(in_nc=3, para_nums=2, num_iterations=1)  # 1个复数参数
 
         # add
         self.ff_down = nn.Conv2d(28, 3, 1, stride=1, padding=0)
@@ -502,7 +502,7 @@ class HSFAUT(nn.Module):
     def initial(self, y, ff_batch, psf_batch):
         ff_feature = self.ff_down(ff_batch)  # 3
         psf_feature = self.psf_down_512(psf_batch)
-        x = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))  
+        x = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))  # [b,7,256,256] --> [b,28,256,256]
         parameters = self.para_estimator_filter(self.fution(torch.cat([y, ff_feature, psf_feature], dim=1)))
         betas = parameters[:, :self.num_iterations,:,:]
         return x, betas
@@ -526,10 +526,11 @@ class HSFAUT(nn.Module):
         u_f, psf_batch_f = Fourier_Tansform(u), Fourier_Tansform(psf_batch)   
         psf_batch_f_RI = self.psf_down_512_f(torch.cat([psf_batch_f.real, psf_batch_f.imag],dim=1))   
         psf_batch_f = torch.complex(psf_batch_f_RI[:, :nC,:,:], psf_batch_f_RI[:, nC:, :, :])  
-        psf_batch_f_s = psf_batch_f * psf_batch_f                                              
+        psf_batch_f_s = psf_batch_f * psf_batch_f.conj()                                              
         psf_feature_f_RI = self.psf_down_256_f(psf_batch_f_RI)                                 
         phi_filter_s = phi_filter_tnt(ff_batch, imaging_system)
         
+        # dict = []
         x = self.conv_in(x)
         for i in range(self.num_iterations):
             beta = betas[:, i:i + 1, :, :]
@@ -545,11 +546,9 @@ class HSFAUT(nn.Module):
             j_f = Fourier_Tansform(j)   # 28 256 256
             # estimator
             parameters = self.para_estimator_conv(self.para_conv(torch.cat([j_f.real, j_f.imag, psf_feature_f_RI], dim=1)))  # 62
-            varphi, chi = parameters[:, 0:2, :, :], parameters[:, 2:4, :, :]
-            # linear 1
-            varphi = torch.complex(varphi[:, :1, :, :], varphi[:, 1:, :, :])
+            varphi, chi = parameters[:, 0:1, :, :], parameters[:, 1:2, :, :]
             u_f = Fourier_Tansform(u).contiguous()
-            x_f = torch.div(j_f * psf_batch_f + varphi * u_f, varphi + psf_batch_f_s)
+            x_f = torch.div(j_f * psf_batch_f.conj() + varphi * u_f, varphi + psf_batch_f_s)
             # denoise 1
             x = torch.real(Inverse_Fourier_Transform(x_f))
             chi_repeat = chi.repeat(1, 1, x_f.shape[2], x_f.shape[3])  # 1
