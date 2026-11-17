@@ -29,7 +29,6 @@ def _no_grad_trunc_normal_(tensor, mean, std, a, b):
 
 
 def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
-    # type: (Tensor, float, float, float, float) -> Tensor
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
 
 
@@ -78,7 +77,7 @@ def conv(in_channels, out_channels, kernel_size, bias=False, padding = 1, stride
         padding=(kernel_size//2), bias=bias, stride=stride)
 
 
-def shift_back(inputs,step=2):          # input [bs,28,256,310]  output [bs, 28, 256, 256]
+def shift_back(inputs,step=2):
     [bs, nC, row, col] = inputs.shape
     down_sample = 256//row
     step = float(step)/float(down_sample*down_sample)
@@ -111,10 +110,6 @@ class MS_MSA(nn.Module):
         self.dim = dim
 
     def forward(self, x_in):
-        """
-        x_in: [b,h,w,c]
-        return out: [b,h,w,c]
-        """
         b, h, w, c = x_in.shape
         x = x_in.reshape(b,h*w,c)
         q_inp = self.to_q(x)
@@ -123,17 +118,16 @@ class MS_MSA(nn.Module):
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.num_heads),
                                 (q_inp, k_inp, v_inp))
         v = v
-        # q: b,heads,hw,c
         q = q.transpose(-2, -1)
         k = k.transpose(-2, -1)
         v = v.transpose(-2, -1)
         q = F.normalize(q, dim=-1, p=2)
         k = F.normalize(k, dim=-1, p=2)
-        attn = (k @ q.transpose(-2, -1))   # A = K^T*Q
+        attn = (k @ q.transpose(-2, -1))
         attn = attn * self.rescale
         attn = attn.softmax(dim=-1)
-        x = attn @ v   # b,heads,d,hw
-        x = x.permute(0, 3, 1, 2)    # Transpose
+        x = attn @ v
+        x = x.permute(0, 3, 1, 2)
         x = x.reshape(b, h * w, self.num_heads * self.dim_head)
         out_c = self.proj(x).view(b, h, w, c)
         out_p = self.pos_emb(v_inp.reshape(b,h,w,c).permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
@@ -153,10 +147,6 @@ class FeedForward(nn.Module):
         )
 
     def forward(self, x):
-        """
-        x: [b,h,w,c]
-        return out: [b,h,w,c]
-        """
         out = self.net(x.permute(0, 3, 1, 2))
         return out.permute(0, 2, 3, 1)
 
@@ -177,10 +167,6 @@ class MSAB(nn.Module):
             ]))
 
     def forward(self, x):
-        """
-        x: [b,c,h,w]
-        return out: [b,c,h,w]
-        """
         x = x.permute(0, 2, 3, 1)
         for (attn, ff) in self.blocks:
             x = attn(x) + x
@@ -194,10 +180,8 @@ class MST(nn.Module):
         self.dim = dim
         self.stage = stage
 
-        # Input projection
         self.embedding = nn.Conv2d(in_dim, self.dim, 3, 1, 1, bias=False)
 
-        # Encoder
         self.encoder_layers = nn.ModuleList([])
         dim_stage = dim
         for i in range(stage):
@@ -208,11 +192,9 @@ class MST(nn.Module):
             ]))
             dim_stage *= 2
 
-        # Bottleneck
         self.bottleneck = MSAB(
             dim=dim_stage, dim_head=dim, heads=dim_stage // dim, num_blocks=num_blocks[-1])
 
-        # Decoder
         self.decoder_layers = nn.ModuleList([])
         for i in range(stage):
             self.decoder_layers.append(nn.ModuleList([
@@ -224,10 +206,8 @@ class MST(nn.Module):
             ]))
             dim_stage //= 2
 
-        # Output projection
         self.mapping = nn.Conv2d(self.dim, out_dim, 3, 1, 1, bias=False)
 
-        #### activation function
         self.lrelu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
         self.apply(self._init_weights)
 
@@ -241,36 +221,26 @@ class MST(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, x):
-        """
-        x: [b,c,h,w]
-        return out:[b,c,h,w]
-        """
 
-        # Embedding
         fea = self.embedding(x)
 
-        # Encoder
         fea_encoder = []
         for (MSAB, FeaDownSample) in self.encoder_layers:
             fea = MSAB(fea)
             fea_encoder.append(fea)
             fea = FeaDownSample(fea)
 
-        # Bottleneck
         fea = self.bottleneck(fea)
 
-        # Decoder
         for i, (FeaUpSample, Fution, LeWinBlcok) in enumerate(self.decoder_layers):
             fea = FeaUpSample(fea)
             fea = Fution(torch.cat([fea, fea_encoder[self.stage-1-i]], dim=1))
             fea = LeWinBlcok(fea)
 
-        # Mapping
         out = self.mapping(fea) + x
 
         return out
 
-# import matplotlib.pyplot as plt
 
 
 class MST_Plus_Plus(nn.Module):
@@ -283,35 +253,24 @@ class MST_Plus_Plus(nn.Module):
         self.body = nn.Sequential(*modules_body)
         self.conv_out = nn.Conv2d(n_feat, out_channels, kernel_size=3, padding=(3 - 1) // 2,bias=False)
 
-        # render
         self.Render = Measurement_Render()
-        # add
         self.ff_down = nn.Conv2d(28, 3, 1, stride=1, padding=0)
-        # 512
         self.psf_down_512 = nn.Conv2d(28, 3, 2, stride=2, padding=0)
-        # 1024
         self.psf_down_1024 = nn.Conv2d(28, 3, 4, stride=4, padding=0)
         self.fution = nn.Conv2d(7, 28, 1, padding=0, bias=True)
 
     def initial(self, y, ff_batch, psf_batch):
-        ff_feature = self.ff_down(ff_batch)  # 3
-        # psf_feature = self.psf_down(psf_batch)  # 3
+        ff_feature = self.ff_down(ff_batch)
         if psf_batch.shape[3] == 512:
             psf_feature = self.psf_down_512(psf_batch)
         elif psf_batch.shape[3] == 1024:
             psf_feature = self.psf_down_1024(psf_batch)
         else:
             raise AttributeError('ukonwn psf shape')
-        z = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))  # [b,7,256,256] --> [b,28,256,256]
+        z = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))
         return z
 
     def forward(self, input_cube, ff_batch, psf_batch, imaging_system, y=None):
-        """
-        :param input_cube: [bs, 28, 512, 512]
-        :param ff_batch:   [bs, 28, 256, 256]
-        :param psf_batch:  [bs, 28, 512, 512]
-        :return: z:        [bs, 28, 256, 256]
-        """
         if y==None:
             y = self.Render(input_cube=input_cube, ff_batch=ff_batch, psf_batch=psf_batch, imaging_system=imaging_system)
         z = self.initial(y, ff_batch, psf_batch)

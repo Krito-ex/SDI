@@ -29,7 +29,6 @@ def _no_grad_trunc_normal_(tensor, mean, std, a, b):
 
 
 def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
-    # type: (Tensor, float, float, float, float) -> Tensor
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
 
 
@@ -78,7 +77,7 @@ def conv(in_channels, out_channels, kernel_size, bias=False, padding = 1, stride
         padding=(kernel_size//2), bias=bias, stride=stride)
 
 
-def shift_back(inputs,step=2):          # input [bs,28,256,310]  output [bs, 28, 256, 256]
+def shift_back(inputs,step=2):
     [bs, nC, row, col] = inputs.shape
     down_sample = 256//row
     step = float(step)/float(down_sample*down_sample)
@@ -111,10 +110,6 @@ class MS_MSA(nn.Module):
         self.dim = dim
 
     def forward(self, x_in):
-        """
-        x_in: [b,h,w,c]
-        return out: [b,h,w,c]
-        """
         b, h, w, c = x_in.shape
         x = x_in.reshape(b,h*w,c)
         q_inp = self.to_q(x)
@@ -123,17 +118,16 @@ class MS_MSA(nn.Module):
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.num_heads),
                                 (q_inp, k_inp, v_inp))
         v = v
-        # q: b,heads,hw,c
         q = q.transpose(-2, -1)
         k = k.transpose(-2, -1)
         v = v.transpose(-2, -1)
         q = F.normalize(q, dim=-1, p=2)
         k = F.normalize(k, dim=-1, p=2)
-        attn = (k @ q.transpose(-2, -1))   # A = K^T*Q
+        attn = (k @ q.transpose(-2, -1))
         attn = attn * self.rescale
         attn = attn.softmax(dim=-1)
-        x = attn @ v   # b,heads,d,hw
-        x = x.permute(0, 3, 1, 2)    # Transpose
+        x = attn @ v
+        x = x.permute(0, 3, 1, 2)
         x = x.reshape(b, h * w, self.num_heads * self.dim_head)
         out_c = self.proj(x).view(b, h, w, c)
         out_p = self.pos_emb(v_inp.reshape(b,h,w,c).permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
@@ -167,24 +161,20 @@ class SFA_MSA(nn.Module):
 
         if use_freq:
             self.freq_conv = nn.Sequential(
-                nn.Conv2d(dim, dim // reduction_ratio, 1),  # 压缩通道
+                nn.Conv2d(dim, dim // reduction_ratio, 1),
                 nn.GELU(),
-                nn.Conv2d(dim // reduction_ratio, dim, 1)   # 恢复通道
+                nn.Conv2d(dim // reduction_ratio, dim, 1)
             )
-            self.freq_gate = nn.Parameter(torch.tensor([0.1]))  # 自适应融合权重
+            self.freq_gate = nn.Parameter(torch.tensor([0.1]))
 
     def forward(self, x_in):
-        """
-        x_in: [b,h,w,c]
-        return out: [b,h,w,c]
-        """
         b, h, w, c = x_in.shape
         if self.use_freq:
             x_perm = x_in.permute(0, 3, 1, 2)
             freqs = torch.fft.rfft2(x_perm, norm='ortho')
             amp = torch.abs(freqs)
             freq_feat = self.freq_conv(amp)
-            if freq_feat.size(-1) != w:  # rfft输出尺寸变化处理
+            if freq_feat.size(-1) != w:
                 freq_feat = F.interpolate(freq_feat, size=(h, w), mode='bilinear')
             freq_feat = freq_feat.permute(0, 2, 3, 1)
             out_freq = self.freq_gate * freq_feat
@@ -196,17 +186,16 @@ class SFA_MSA(nn.Module):
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.num_heads),
                                 (q_inp, k_inp, v_inp))
         v = v
-        # q: b,heads,hw,c
         q = q.transpose(-2, -1)
         k = k.transpose(-2, -1)
         v = v.transpose(-2, -1)
         q = F.normalize(q, dim=-1, p=2)
         k = F.normalize(k, dim=-1, p=2)
-        attn = (k @ q.transpose(-2, -1))   # A = K^T*Q
+        attn = (k @ q.transpose(-2, -1))
         attn = attn * self.rescale
         attn = attn.softmax(dim=-1)
-        x = attn @ v   # b,heads,d,hw
-        x = x.permute(0, 3, 1, 2)    # Transpose
+        x = attn @ v
+        x = x.permute(0, 3, 1, 2)
         x = x.reshape(b, h * w, self.num_heads * self.dim_head)
         out_c = self.proj(x).view(b, h, w, c)
         out_p = self.pos_emb(v_inp.reshape(b,h,w,c).permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
@@ -227,10 +216,6 @@ class FeedForward(nn.Module):
         )
 
     def forward(self, x):
-        """
-        x: [b,h,w,c]
-        return out: [b,h,w,c]
-        """
         out = self.net(x.permute(0, 3, 1, 2))
         return out.permute(0, 2, 3, 1)
 
@@ -251,10 +236,6 @@ class SFAAB(nn.Module):
             ]))
 
     def forward(self, x):
-        """
-        x: [b,c,h,w]
-        return out: [b,c,h,w]
-        """
         x = x.permute(0, 2, 3, 1)
         for (attn, ff) in self.blocks:
             x = attn(x) + x
@@ -269,10 +250,8 @@ class SFAT(nn.Module):
         self.out_dim = out_dim
         self.stage = stage
 
-        # Input projection
         self.embedding = nn.Conv2d(in_dim, self.dim, 3, 1, 1, bias=False)
 
-        # Encoder
         self.encoder_layers = nn.ModuleList([])
         dim_stage = dim
         for i in range(stage):
@@ -283,11 +262,9 @@ class SFAT(nn.Module):
             ]))
             dim_stage *= 2
 
-        # Bottleneck
         self.bottleneck = SFAAB(
             dim=dim_stage, dim_head=dim, heads=dim_stage // dim, num_blocks=num_blocks[-1])
 
-        # Decoder
         self.decoder_layers = nn.ModuleList([])
         for i in range(stage):
             self.decoder_layers.append(nn.ModuleList([
@@ -299,7 +276,6 @@ class SFAT(nn.Module):
             ]))
             dim_stage //= 2
 
-        # Output projection
         self.mapping = nn.Conv2d(self.dim, out_dim, 3, 1, 1, bias=False)
         self.apply(self._init_weights)
 
@@ -313,32 +289,23 @@ class SFAT(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, x):
-        """
-        x: [b,c,h,w]
-        return out:[b,c,h,w]
-        """
 
-        # Embedding    需要和SST的方法保持一致
         fea = self.embedding(x)
         x = x[:,:self.out_dim,:,:]
 
-        # Encoder
         fea_encoder = []
         for (MSAB, FeaDownSample) in self.encoder_layers:
             fea = MSAB(fea)
             fea_encoder.append(fea)
             fea = FeaDownSample(fea)
 
-        # Bottleneck
         fea = self.bottleneck(fea)
 
-        # Decoder
         for i, (FeaUpSample, Fution, LeWinBlcok) in enumerate(self.decoder_layers):
             fea = FeaUpSample(fea)
             fea = Fution(torch.cat([fea, fea_encoder[self.stage-1-i]], dim=1))
             fea = LeWinBlcok(fea)
 
-        # Mapping
         out = self.mapping(fea) + x
         return out
 
@@ -391,12 +358,6 @@ def phi_filter_t(y, filter_function, imaging_system):
     x = x * filter_function
     return x
 
-# def phi_filter_tnt(x, filter_function, imaging_system):
-#     para = {'ADIS': 15, 'DOE-based': 4, 'diffuser-based': 6}
-#     filter_function = filter_function * para[imaging_system]
-#     y = torch.sum(x * filter_function, dim=1, keepdim=True)
-#     x = y.repeat(1, filter_function.shape[1], 1, 1) * filter_function
-#     return x
 
 def phi_filter_tnt(filter_function, imaging_system):
     para = {'ADIS': 15, 'DOE-based': 4, 'diffuser-based': 6}
@@ -407,36 +368,23 @@ def phi_filter_tnt(filter_function, imaging_system):
 
 
 def Fast_conv(DHSI, psf_cube):
-    '''
-    Args:
-        DHSI: [bs, C, H, W]        256
-        psf_cube: [bs, C, h, w]    512
-    Returns:
-        output_cube: [bs, C, H, W]
-    not crop
-    '''
     [bs,C,H,W] = DHSI.shape
     [bs,C,h,w] = psf_cube.shape
     output_cube = torch.zeros([bs, C, H, W], device=DHSI.device)
-    # prepare padding size to accommodate FFT-based convolution
     YH = max(H, h)
     YW = max(W, w)
     for i in range(bs):
-        HSI = DHSI[i]   # [C,H,W]
-        psf = psf_cube[i]   # [C,h,w]
+        HSI = DHSI[i]
+        psf = psf_cube[i]
         HSI_padded = torch.zeros([C, YH, YW], device=HSI.device)
         psf_padded = torch.zeros([C, YH, YW], device=psf.device)
         HSI_padded[:, (YH - H) // 2:(YH - H) // 2 + H, (YW - W) // 2:(YW - W) // 2 + W] = HSI
         psf_padded[:, (YH - h) // 2:(YH - h) // 2 + h, (YW - w) // 2:(YW - w) // 2 + w] = psf
         HSI_fft = torch.fft.rfft2(HSI_padded, s=(YH,YW)).cuda()
         psf_fft = torch.fft.rfft2(psf_padded, s=(YH,YW)).cuda()
-        # Element-wise multiplication in the frequency domain
         conv_result_fft = HSI_fft * psf_fft
-        # inverse FFT to get the convolution result in the spatial domain
         conv_result = torch.fft.irfft2(conv_result_fft)[:,:YH,:YW]
-        # roll
         conv_result = torch.roll(conv_result, shifts=(YH//2, YW//2), dims=(1,2))
-        # crop the result to the valid region
         meas = conv_result[:, YH//2-H//2:YH//2+H//2, YW//2-W//2:YW//2+W//2]
         output_cube[i] = meas.squeeze(0)
     return output_cube
@@ -487,11 +435,9 @@ class HSFAUT(nn.Module):
             self.denoisers_conv.append(SFAT(in_dim=35, out_dim=out_channels, dim=n_feat, stage=2, num_blocks=[1, 1, 1]))
 
         self.para_estimator_filter = HyPaNet(in_nc=28, para_nums=1, num_iterations=num_iterations)
-        self.para_estimator_conv = HyPaNet(in_nc=3, para_nums=2, num_iterations=1)  # 1个复数参数
+        self.para_estimator_conv = HyPaNet(in_nc=3, para_nums=2, num_iterations=1)
 
-        # add
         self.ff_down = nn.Conv2d(28, 3, 1, stride=1, padding=0)
-        # 512
         self.psf_down_512 = nn.Conv2d(28, 3, 2, stride=2, padding=0)
         self.psf_down_512_f = nn.Conv2d(56, 56, 2, stride=2, padding=0)
         self.psf_down_256_f = nn.Conv2d(56, 6, 1, stride=1, padding=0)
@@ -500,9 +446,9 @@ class HSFAUT(nn.Module):
 
 
     def initial(self, y, ff_batch, psf_batch):
-        ff_feature = self.ff_down(ff_batch)  # 3
+        ff_feature = self.ff_down(ff_batch)
         psf_feature = self.psf_down_512(psf_batch)
-        x = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))  # [b,7,256,256] --> [b,28,256,256]
+        x = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))
         parameters = self.para_estimator_filter(self.fution(torch.cat([y, ff_feature, psf_feature], dim=1)))
         betas = parameters[:, :self.num_iterations,:,:]
         return x, betas
@@ -510,15 +456,9 @@ class HSFAUT(nn.Module):
 
     def forward(self, input_cube, ff_batch, psf_batch, imaging_system, y=None):
 
-        """
-        :param input_cube: [bs, 28, 512, 512]
-        :param ff_batch:   [bs, 28, 256, 256]
-        :param psf_batch:  [bs, 28, 512, 512]
-        :return: z:        [bs, 28, 256, 256]
-        """
         if y==None:
             Render = Measurement_Render()
-            y = Render(input_cube=input_cube, ff_batch=ff_batch, psf_batch=psf_batch, imaging_system=imaging_system)   # y=M
+            y = Render(input_cube=input_cube, ff_batch=ff_batch, psf_batch=psf_batch, imaging_system=imaging_system)
         bs, nC, H, W = ff_batch.shape
         x, betas = self.initial(y, ff_batch, psf_batch)
         x, betas = x.contiguous(),  betas.contiguous()
@@ -530,28 +470,21 @@ class HSFAUT(nn.Module):
         psf_feature_f_RI = self.psf_down_256_f(psf_batch_f_RI)                                 
         phi_filter_s = phi_filter_tnt(ff_batch, imaging_system)
         
-        # dict = []
         x = self.conv_in(x)
         for i in range(self.num_iterations):
             beta = betas[:, i:i + 1, :, :]
-            '''stage 1'''
             x_conv = Fast_conv(x, psf_batch)
             a = torch.div(y - phi_filter(x_conv, ff_batch, imaging_system), beta + phi_filter_s)
             j = x_conv + phi_filter_t(a, ff_batch, imaging_system)
-            '''fution'''
             a = self.fution_update_conv(torch.cat([j, x_conv], dim=1))
             j = self.fution_update[i](a)
-            '''stage 2'''
-            # Transform
-            j_f = Fourier_Tansform(j)   # 28 256 256
-            # estimator
-            parameters = self.para_estimator_conv(self.para_conv(torch.cat([j_f.real, j_f.imag, psf_feature_f_RI], dim=1)))  # 62
+            j_f = Fourier_Tansform(j)
+            parameters = self.para_estimator_conv(self.para_conv(torch.cat([j_f.real, j_f.imag, psf_feature_f_RI], dim=1)))
             varphi, chi = parameters[:, 0:1, :, :], parameters[:, 1:2, :, :]
             u_f = Fourier_Tansform(u).contiguous()
             x_f = torch.div(j_f * psf_batch_f.conj() + varphi * u_f, varphi + psf_batch_f_s)
-            # denoise 1
             x = torch.real(Inverse_Fourier_Transform(x_f))
-            chi_repeat = chi.repeat(1, 1, x_f.shape[2], x_f.shape[3])  # 1
-            u = self.denoisers_conv[i](torch.cat([x, chi_repeat, psf_feature_f_RI], dim=1))  # 28 1 6
+            chi_repeat = chi.repeat(1, 1, x_f.shape[2], x_f.shape[3])
+            u = self.denoisers_conv[i](torch.cat([x, chi_repeat, psf_feature_f_RI], dim=1))
         return u[:, :, :, :]
     

@@ -31,7 +31,6 @@ torch.backends.cudnn.benchmark = True
 if not torch.cuda.is_available():
     raise Exception('NO GPU!')
 
-# dataset
 filter_function = init_filter_function(opt.ff_path)
 psf = init_psf(opt.psf_path)
 print('prior information is loaded')
@@ -42,7 +41,6 @@ test_gt = test_data.cuda().float()
 print('dataset is loaded')
 imaging_system = opt.imaging_system
 
-# saving path
 date_time = str(datetime.datetime.now())
 date_time = time2file_name(date_time)
 result_path = opt.outf + date_time + '/result/'
@@ -52,7 +50,6 @@ if not os.path.exists(result_path):
 if not os.path.exists(model_path):
     os.makedirs(model_path)
 
-# model
 if opt.method=='hdnet':
     model, FDL_loss = model_generator(opt.method, opt.pretrained_model_path)
     model = model.cuda()
@@ -60,7 +57,6 @@ if opt.method=='hdnet':
 else:
     model = model_generator(opt.method, opt.pretrained_model_path).cuda()
 
-# optimizing
 optimizer = torch.optim.Adam(model.parameters(), lr=opt.learning_rate, betas=(0.9, 0.999))
 if opt.scheduler=='MultiStepLR':
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=opt.milestones, gamma=opt.gamma)
@@ -84,7 +80,7 @@ def train(epoch, logger, psf, ff):
         input_cube, gt_batch = Variable(input_cube), Variable(gt_batch)
         input_cube, gt_batch = input_cube.cuda(), gt_batch.cuda()
         psf_batch = psf.unsqueeze(0).repeat(input_cube.shape[0], 1, 1, 1)  
-        ff_batch = ff.unsqueeze(0).repeat(input_cube.shape[0], 1, 1, 1)    #
+        ff_batch = ff.unsqueeze(0).repeat(input_cube.shape[0], 1, 1, 1)
         psf_batch = psf_batch.to(input_cube.device)
         ff_batch = ff_batch.to(input_cube.device)
 
@@ -111,7 +107,6 @@ def train(epoch, logger, psf, ff):
     end_time = time.time()
     logger.info("===> Epoch {} Complete: Avg. Loss: {:.6f} time: {:.2f}".
                 format(epoch, epoch_loss / len(Dataset), (end_time - start_time)))
-    # torch.save(model, os.path.join(opt.outf, 'model_%03d.pth' % (epoch + 1)))
     return 0
 
 def test(epoch, logger, input_mea, gt_batch, ff_batch, psf_batch):

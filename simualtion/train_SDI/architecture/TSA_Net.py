@@ -79,27 +79,9 @@ _NORM_FC = False
 
 
 class TSA_Transform(nn.Module):
-    """ Spectral-Spatial Self-Attention """
 
     def __init__(self, uSpace, inChannel, outChannel, nHead, uAttn, mode=[0, 1], flag_mask=False, gamma_learn=False):
         super(TSA_Transform, self).__init__()
-        ''' ------------------------------------------
-        uSpace:
-            uHeight: the [-2] dim of the 3D tensor
-            uWidth: the [-1] dim of the 3D tensor
-        inChannel: 
-            the number of Channel of the input tensor
-        outChannel: 
-            the number of Channel of the output tensor
-        nHead: 
-            the number of Head of the input tensor
-        uAttn:
-            uSpatial: the dim of the spatial features
-            uSpectral: the dim of the spectral features
-        mask:
-            The Spectral Smoothness Mask
-        {mode} and {gamma_learn} is just for variable selection
-        ------------------------------------------ '''
 
         self.nHead = nHead
         self.uAttn = uAttn
@@ -186,7 +168,6 @@ class TSA_Transform(nn.Module):
 
 
 class Feature_Spatial(nn.Module):
-    """ Spatial Feature Generation Component """
 
     def __init__(self, inChannel, nHead, shiftDim, outDim, mode):
         super(Feature_Spatial, self).__init__()
@@ -207,7 +188,6 @@ class Feature_Spatial(nn.Module):
 
 
 class Feature_Spectral(nn.Module):
-    """ Spectral Feature Generation Component """
 
     def __init__(self, inChannel, nHead, viewDim, outDim):
         super(Feature_Spectral, self).__init__()
@@ -226,7 +206,6 @@ class Feature_Spectral(nn.Module):
 
 
 def Spectral_Mask(dim_lambda):
-    '''After put the available data into the model, we use this mask to avoid outputting the estimation of itself.'''
     orig = (np.cos(np.linspace(-1, 1, num=2 * dim_lambda - 1) * np.pi) + 1.0) / 2.0
     att = np.zeros((dim_lambda, dim_lambda))
     for i in range(dim_lambda):
@@ -259,35 +238,24 @@ class TSA_Net(nn.Module):
         self.conv_last = nn.Conv2d(out_ch, out_ch, 1)
         self.afn_last = nn.Sigmoid()
 
-        # render
         self.Render = Measurement_Render()
-        # add
         self.ff_down = nn.Conv2d(28, 3, 1, stride=1, padding=0)
-        # 512
         self.psf_down_512 = nn.Conv2d(28, 3, 2, stride=2, padding=0)
-        # 1024
         self.psf_down_1024 = nn.Conv2d(28, 3, 4, stride=4, padding=0)
         self.fution = nn.Conv2d(7, 28, 1, padding=0, bias=True)
 
     def initial(self, y, ff_batch, psf_batch):
-        ff_feature = self.ff_down(ff_batch)  # 3
-        # psf_feature = self.psf_down(psf_batch)  # 3
+        ff_feature = self.ff_down(ff_batch)
         if psf_batch.shape[3] == 512:
             psf_feature = self.psf_down_512(psf_batch)
         elif psf_batch.shape[3] == 1024:
             psf_feature = self.psf_down_1024(psf_batch)
         else:
             raise AttributeError('ukonwn psf shape')
-        z = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))  # [b,7,256,256] --> [b,28,256,256]
+        z = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))
         return z
 
     def forward(self, input_cube, ff_batch, psf_batch, imaging_system, y=None):
-        """
-        :param input_cube: [bs, 28, 512, 512]
-        :param ff_batch:   [bs, 28, 256, 256]
-        :param psf_batch:  [bs, 28, 512, 512]
-        :return: z:        [bs, 28, 256, 256]
-        """
         if y == None:
             y = self.Render(input_cube=input_cube, ff_batch=ff_batch, psf_batch=psf_batch, imaging_system=imaging_system)
         x = self.initial(y, ff_batch, psf_batch)
@@ -295,12 +263,10 @@ class TSA_Net(nn.Module):
         enc2, enc2_pre = self.tconv_down2(enc1)
         enc3, enc3_pre = self.tconv_down3(enc2)
         enc4, enc4_pre = self.tconv_down4(enc3)
-        # enc5,enc5_pre = self.tconv_down5(enc4)
 
         bottom = self.bottom1(enc4)
         bottom = self.bottom2(bottom)
 
-        # dec5 = self.tconv_up5(bottom,enc5_pre)
         dec4 = self.tconv_up4(bottom, enc4_pre)
         dec3 = self.tconv_up3(dec4, enc3_pre)
         dec3, _ = self.transform3(dec3)

@@ -1,24 +1,10 @@
-# ------------------------------------------------------------------------
 # Copyright (c) 2022 megvii-model. All Rights Reserved.
-# ------------------------------------------------------------------------
 
-'''
-Simple Baselines for Image Restoration
-
-@article{chen2022simple,
-  title={Simple Baselines for Image Restoration},
-  author={Chen, Liangyu and Chu, Xiaojie and Zhang, Xiangyu and Sun, Jian},
-  journal={arXiv preprint arXiv:2204.04676},
-  year={2022}
-}
-'''
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .model_base import Measurement_Render
-# from basicsr.models.archs.arch_util import LayerNorm2d
-# from basicsr.models.archs.local_arch import Local_Base
 
 class AvgPool2d(nn.Module):
     def __init__(self, kernel_size=None, base_size=None, auto_pad=True, fast_imp=False, train_size=None):
@@ -27,7 +13,6 @@ class AvgPool2d(nn.Module):
         self.base_size = base_size
         self.auto_pad = auto_pad
 
-        # only used for fast implementation
         self.fast_imp = fast_imp
         self.rs = [5, 4, 3, 2, 1]
         self.max_r1 = self.rs[0]
@@ -48,21 +33,19 @@ class AvgPool2d(nn.Module):
             self.kernel_size[0] = x.shape[2] * self.base_size[0] // train_size[-2]
             self.kernel_size[1] = x.shape[3] * self.base_size[1] // train_size[-1]
 
-            # only used for fast implementation
             self.max_r1 = max(1, self.rs[0] * x.shape[2] // train_size[-2])
             self.max_r2 = max(1, self.rs[0] * x.shape[3] // train_size[-1])
 
         if self.kernel_size[0] >= x.size(-2) and self.kernel_size[1] >= x.size(-1):
             return F.adaptive_avg_pool2d(x, 1)
 
-        if self.fast_imp:  # Non-equivalent implementation but faster
+        if self.fast_imp:
             h, w = x.shape[2:]
             if self.kernel_size[0] >= h and self.kernel_size[1] >= w:
                 out = F.adaptive_avg_pool2d(x, 1)
             else:
                 r1 = [r for r in self.rs if h % r == 0][0]
                 r2 = [r for r in self.rs if w % r == 0][0]
-                # reduction_constraint
                 r1 = min(self.max_r1, r1)
                 r2 = min(self.max_r2, r2)
                 s = x[:, :, ::r1, ::r2].cumsum(dim=-1).cumsum(dim=-2)
@@ -73,7 +56,7 @@ class AvgPool2d(nn.Module):
         else:
             n, c, h, w = x.shape
             s = x.cumsum(dim=-1).cumsum_(dim=-2)
-            s = torch.nn.functional.pad(s, (1, 0, 1, 0))  # pad 0 for convenience
+            s = torch.nn.functional.pad(s, (1, 0, 1, 0))
             k1, k2 = min(h, self.kernel_size[0]), min(w, self.kernel_size[1])
             s1, s2, s3, s4 = s[:, :, :-k1, :-k2], s[:, :, :-k1, k2:], s[:, :, k1:, :-k2], s[:, :, k1:, k2:]
             out = s4 + s1 - s2 - s3
@@ -82,7 +65,6 @@ class AvgPool2d(nn.Module):
         if self.auto_pad:
             n, c, h, w = x.shape
             _h, _w = out.shape[2:]
-            # print(x.shape, self.kernel_size)
             pad2d = ((w - _w) // 2, (w - _w + 1) // 2, (h - _h) // 2, (h - _h + 1) // 2)
             out = torch.nn.functional.pad(out, pad2d, mode='replicate')
 
@@ -92,7 +74,6 @@ class AvgPool2d(nn.Module):
 def replace_layers(model, base_size, train_size, fast_imp, **kwargs):
     for n, m in model.named_children():
         if len(list(m.children())) > 0:
-            ## compound module, go inside it
             replace_layers(m, base_size, train_size, fast_imp, **kwargs)
 
         if isinstance(m, nn.AdaptiveAvgPool2d):
@@ -159,14 +140,12 @@ class NAFBlock(nn.Module):
                                bias=True)
         self.conv3 = nn.Conv2d(in_channels=dw_channel // 2, out_channels=c, kernel_size=1, padding=0, stride=1, groups=1, bias=True)
         
-        # Simplified Channel Attention
         self.sca = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Conv2d(in_channels=dw_channel // 2, out_channels=dw_channel // 2, kernel_size=1, padding=0, stride=1,
                       groups=1, bias=True),
         )
 
-        # SimpleGate
         self.sg = SimpleGate()
 
         ffn_channel = FFN_Expand * c
@@ -255,40 +234,28 @@ class NAFNet(nn.Module):
 
         self.padder_size = 2 ** len(self.encoders)
 
-        # render
         self.Render = Measurement_Render()
-        # add
         self.ff_down = nn.Conv2d(28, 3, 1, stride=1, padding=0)
-        # 512
         self.psf_down_512 = nn.Conv2d(28, 3, 2, stride=2, padding=0)
-        # 1024
         self.psf_down_1024 = nn.Conv2d(28, 3, 4, stride=4, padding=0)
         self.fution = nn.Conv2d(7, 28, 1, padding=0, bias=True)
 
     def initial(self, y, ff_batch, psf_batch):
-        ff_feature = self.ff_down(ff_batch)  # 3
-        # psf_feature = self.psf_down(psf_batch)  # 3
+        ff_feature = self.ff_down(ff_batch)
         if psf_batch.shape[3] == 512:
             psf_feature = self.psf_down_512(psf_batch)
         elif psf_batch.shape[3] == 1024:
             psf_feature = self.psf_down_1024(psf_batch)
         else:
             raise AttributeError('ukonwn psf shape')
-        z = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))  # [b,7,256,256] --> [b,28,256,256]
+        z = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))
         return z
 
     def forward(self, input_cube, ff_batch, psf_batch, imaging_system, y=None):
-        """
-        :param input_cube: [bs, 28, 512, 512]
-        :param ff_batch:   [bs, 28, 256, 256]
-        :param psf_batch:  [bs, 28, 512, 512]
-        :return: z:        [bs, 28, 256, 256]
-        """
         if y == None:
             y = self.Render(input_cube=input_cube, ff_batch=ff_batch, psf_batch=psf_batch, imaging_system=imaging_system)
         inp = self.initial(y, ff_batch, psf_batch)
     
-    # def forward(self, inp):
         B, C, H, W = inp.shape
         inp = self.check_image_size(inp)
 
@@ -333,29 +300,12 @@ class NAFNetLocal(Local_Base, NAFNet):
             self.convert(base_size=base_size, train_size=train_size, fast_imp=fast_imp)
 
 
-# if __name__ == '__main__':
-#     img_channel = 3
-#     width = 32
 
-#     # enc_blks = [2, 2, 4, 8]
-#     # middle_blk_num = 12
-#     # dec_blks = [2, 2, 2, 2]
 
-#     enc_blks = [1, 1, 1, 28]
-#     middle_blk_num = 1
-#     dec_blks = [1, 1, 1, 1]
     
-#     net = NAFNet(img_channel=img_channel, width=width, middle_blk_num=middle_blk_num,
-#                       enc_blk_nums=enc_blks, dec_blk_nums=dec_blks)
 
 
-#     inp_shape = (3, 256, 256)
 
-#     from ptflops import get_model_complexity_info
 
-#     macs, params = get_model_complexity_info(net, inp_shape, verbose=False, print_per_layer_stat=False)
 
-#     params = float(params[:-3])
-#     macs = float(macs[:-4])
 
-#     print(macs, params)

@@ -28,14 +28,13 @@ def _no_grad_trunc_normal_(tensor, mean, std, a, b):
 
 
 def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
-    # type:(Tensor, float, float, float, float) -> Tensor
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
 
 
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
-        self.fn = fn      #HS_MSA or FFN
+        self.fn = fn
         self.norm = nn.LayerNorm(dim)
 
     def forward(self, x, *args, **kwargs):
@@ -52,112 +51,92 @@ class SS_MSA(nn.Module):
     def __init__(
             self,
             dim,
-            window_size=(8, 8),   #(8,8)
+            window_size=(8, 8),
             dim_head=28,
-            heads=8,              #heads=dim_scale//dim  1,2
+            heads=8,
             only_local_branch=False
     ):
         super().__init__()
 
         self.dim = dim
-        self.heads = heads                    # 1,2
-        self.scale = dim_head ** -0.5         # 1/sqrt(28) = 0.189
-        self.window_size = window_size        # (8,8)
+        self.heads = heads
+        self.scale = dim_head ** -0.5
+        self.window_size = window_size
         self.only_local_branch = only_local_branch
 
-        # position embedding
         if only_local_branch:
-            seq_l = window_size[0] * window_size[1]       # 64
-            self.pos_emb = nn.Parameter(torch.Tensor(1, heads, seq_l*4, seq_l*4))   #(1,1,64,64)
-            trunc_normal_(self.pos_emb)   #trunc_normal_(parameter(1,1,64,64))
+            seq_l = window_size[0] * window_size[1]
+            self.pos_emb = nn.Parameter(torch.Tensor(1, heads, seq_l*4, seq_l*4))
+            trunc_normal_(self.pos_emb)
         else:
-            seq_l1 = window_size[0] * window_size[1]       # 64
-            self.pos_emb1 = nn.Parameter(torch.Tensor(1, 1, heads//2, seq_l1, seq_l1))  #(1,1,0,64,64);(1,1,1,64,64)
-            # h,w = 256//self.heads,320//self.heads
-            h, w = 256 // self.heads, 256 // self.heads   #256,256;    128,128
-            seq_l2 = h*w//seq_l1                          #256*256//64=1024; 128*128//64=256
-            self.pos_emb2 = nn.Parameter(torch.Tensor(1, 1, heads//2, seq_l2, seq_l2)) #(1,1,1,64,64)
+            seq_l1 = window_size[0] * window_size[1]
+            self.pos_emb1 = nn.Parameter(torch.Tensor(1, 1, heads//2, seq_l1, seq_l1))
+            h, w = 256 // self.heads, 256 // self.heads
+            seq_l2 = h*w//seq_l1
+            self.pos_emb2 = nn.Parameter(torch.Tensor(1, 1, heads//2, seq_l2, seq_l2))
             trunc_normal_(self.pos_emb1)
             trunc_normal_(self.pos_emb2)
 
-        inner_dim = dim_head * heads  #28, 56
-        # x:b,h,w,28;
+        inner_dim = dim_head * heads
         self.to_q = nn.Linear(dim, inner_dim, bias=False)
         self.to_kv = nn.Linear(dim, inner_dim * 2, bias=False)
         self.to_out = nn.Linear(inner_dim, dim)
 
     def forward(self, x):
-        """
-        x: [b,h,w,c]
-        return out: [b,h,w,c]
-        """
-        b, h, w, c = x.shape           # 5 256 256 28;   5 256 256 28
-        w_size = self.window_size      #(8,8)
+        b, h, w, c = x.shape
+        w_size = self.window_size
         assert h % w_size[0] == 0 and w % w_size[1] == 0, 'fmap dimensions must be divisible by the window size'
 
         if self.only_local_branch:
-            #x: 5 256 256 28
-            q = self.to_q(x)                           # 5 256 256 28
-            k, v = self.to_kv(x).chunk(2, dim = -1)    # 5 256 256 28
-            # q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), (q, k, v))  # [5120,1,64,28]
+            q = self.to_q(x)
+            k, v = self.to_kv(x).chunk(2, dim = -1)
             q, k, v = map(lambda t: rearrange(t, 'b (h b0) (w b1) c -> b (h w) (b0 b1) c',
-                                                 b0=w_size[0]*2, b1=w_size[1]*2), (q, k, v))  # 256=16*16 [5,256,256,28]
+                                                 b0=w_size[0]*2, b1=w_size[1]*2), (q, k, v))
             q, k, v = map(lambda t: rearrange(t, 'b n mm (h d) -> b n h mm d', h=1),
-                             (q, k, v))  # [5,256,1,256,28]
+                             (q, k, v))
             q *= self.scale
-            sim = einsum('b n h i d, b n h j d -> b n h i j', q, k)  # [5,256,1,256,256]
+            sim = einsum('b n h i d, b n h j d -> b n h i j', q, k)
             sim = sim + self.pos_emb
-            # 固定位移
             sim = torch.roll(sim, shifts=(1, 1), dims=(3, 4))
-            attn = sim.softmax(dim=-1)  # [5,256,1,256,256]
-            out = einsum('b n h i j, b n h j d -> b n h i d', attn, v)  # [5,256,1,256,28]
-            out = rearrange(out, 'b n h mm d -> b n mm (h d)')  # [5,256,256,28]
+            attn = sim.softmax(dim=-1)
+            out = einsum('b n h i j, b n h j d -> b n h i d', attn, v)
+            out = rearrange(out, 'b n h mm d -> b n mm (h d)')
 
-        else:    #只要不是位移的branch，就进行半shuffle操作,将local_branch进行位移操作
-            q = self.to_q(x)    #5 128 128 56 heads=2
-            k, v = self.to_kv(x).chunk(2, dim=-1)     #[ 5,128,128,56]
-            q1, q2 = q[:,:,:,:c//2], q[:,:,:,c//2:]   #按照通道将数据划分为两个部分，一部分不进行操作，另外一部分进行通道shuffle操作
+        else:
+            q = self.to_q(x)
+            k, v = self.to_kv(x).chunk(2, dim=-1)
+            q1, q2 = q[:,:,:,:c//2], q[:,:,:,c//2:]
             k1, k2 = k[:,:,:,:c//2], k[:,:,:,c//2:]
-            v1, v2 = v[:,:,:,:c//2], v[:,:,:,c//2:]   #[5,128,128,28]
+            v1, v2 = v[:,:,:,:c//2], v[:,:,:,c//2:]
 
-            # local branch
             q1, k1, v1 = map(lambda t: rearrange(t, 'b (h b0) (w b1) c -> b (h w) (b0 b1) c',
-                                              b0=w_size[0], b1=w_size[1]), (q1, k1, v1))  #128=16*8 [5,256,64,28]
-            #对传入的参数t执行rearrane:[b,8h,8w,c]->[b,hw,64,c]操作
-            #map函数相当于指定（q1,k1,v1）作为隐函数
-            q1, k1, v1 = map(lambda t: rearrange(t, 'b n mm (h d) -> b n h mm d', h=self.heads//2), (q1, k1, v1))  #[5,256,1,64,28]
+                                              b0=w_size[0], b1=w_size[1]), (q1, k1, v1))
+            q1, k1, v1 = map(lambda t: rearrange(t, 'b n mm (h d) -> b n h mm d', h=self.heads//2), (q1, k1, v1))
             q1 *= self.scale
-            sim1 = einsum('b n h i d, b n h j d -> b n h i j', q1, k1) #[5,256,1,64,64]
-            sim1 = sim1 + self.pos_emb1 #[5,256,1,64,64]
-            # 固定位移
-            # shifts = np.random.choice((2, -2), 2)
-            # sim1 = torch.roll(sim1, shifts=(int(shifts[0]),int(shifts[1])), dims=(3, 4))
+            sim1 = einsum('b n h i d, b n h j d -> b n h i j', q1, k1)
+            sim1 = sim1 + self.pos_emb1
             sim1 = torch.roll(sim1, shifts=(1, 1), dims=(3, 4))
-            attn1 = sim1.softmax(dim=-1) #[5,256,1,64,64]
-            out1 = einsum('b n h i j, b n h j d -> b n h i d', attn1, v1) #[5,256,1,64,28]
-            out1 = rearrange(out1, 'b n h mm d -> b n mm (h d)') #[5,256,64,28]
+            attn1 = sim1.softmax(dim=-1)
+            out1 = einsum('b n h i j, b n h j d -> b n h i d', attn1, v1)
+            out1 = rearrange(out1, 'b n h mm d -> b n mm (h d)')
 
-            # non-local branch
             q2, k2, v2 = map(lambda t: rearrange(t, 'b (h b0) (w b1) c -> b (h w) (b0 b1) c',
-                                                 b0=w_size[0], b1=w_size[1]), (q2, k2, v2))  #128=16*8 [5,256,64,28]
-            q2, k2, v2 = map(lambda t: t.permute(0, 2, 1, 3), (q2.clone(), k2.clone(), v2.clone()))  # [5,64,256,28]
-            q2, k2, v2 = map(lambda t: rearrange(t, 'b n mm (h d) -> b n h mm d', h=self.heads//2), (q2, k2, v2)) # [5,64,1,256,28]
+                                                 b0=w_size[0], b1=w_size[1]), (q2, k2, v2))
+            q2, k2, v2 = map(lambda t: t.permute(0, 2, 1, 3), (q2.clone(), k2.clone(), v2.clone()))
+            q2, k2, v2 = map(lambda t: rearrange(t, 'b n mm (h d) -> b n h mm d', h=self.heads//2), (q2, k2, v2))
             q2 *= self.scale
             sim2 = einsum('b n h i d, b n h j d -> b n h i j', q2, k2)
-            sim2 = sim2 + self.pos_emb2    # [5,64,1,256,256]
-            # 固定位移
-            # shifts = np.random.choice((2, -2), 2)
-            # sim2 = torch.roll(sim2, shifts=(int(shifts[0]),int(shifts[1])), dims=(3, 4))
+            sim2 = sim2 + self.pos_emb2
             sim2 = torch.roll(sim2, shifts=(1, 1), dims=(3, 4))
-            attn2 = sim2.softmax(dim=-1)   # [5,64,1,256,256]
-            out2 = einsum('b n h i j, b n h j d -> b n h i d', attn2, v2)  # [5,64,1,256,28]
-            out2 = rearrange(out2, 'b n h mm d -> b n mm (h d)')           # [5,64,256,28]
-            out2 = out2.permute(0, 2, 1, 3)                                # [5,256,64,28]
+            attn2 = sim2.softmax(dim=-1)
+            out2 = einsum('b n h i j, b n h j d -> b n h i d', attn2, v2)
+            out2 = rearrange(out2, 'b n h mm d -> b n mm (h d)')
+            out2 = out2.permute(0, 2, 1, 3)
 
-            out = torch.cat([out1,out2],dim=-1).contiguous()  # [5,256,64,56]
-            out = self.to_out(out)                            # [5,256,64,56]
+            out = torch.cat([out1,out2],dim=-1).contiguous()
+            out = self.to_out(out)
             out = rearrange(out, 'b (h w) (b0 b1) c -> b (h b0) (w b1) c', h=h // w_size[0], w=w // w_size[1],
-                            b0=w_size[0])                     # [5,128,128,56]
+                            b0=w_size[0])
         return out
 
 class SSAB(nn.Module):
@@ -166,8 +145,8 @@ class SSAB(nn.Module):
             dim,
             window_size=(8, 8),
             dim_head=64,
-            heads=8,         #heads=1->2
-            num_blocks=2,    #输入为num_blocks[i], num_blocks=[1,1,1]
+            heads=8,
+            num_blocks=2,
     ):
         super().__init__()
         self.blocks = nn.ModuleList([])
@@ -178,11 +157,7 @@ class SSAB(nn.Module):
             ]))
 
     def forward(self, x):
-        """
-        x: [b,c,h,w]
-        return out: [b,c,h,w]
-        """
-        x = x.permute(0, 2, 3, 1)    #[b,h,w,c]
+        x = x.permute(0, 2, 3, 1)
         for (attn, ff) in self.blocks:
             x = attn(x) + x
             x = ff(x) + x
@@ -201,10 +176,6 @@ class FeedForward(nn.Module):
         )
 
     def forward(self, x):
-        """
-        x: [b,h,w,c]
-        return out: [b,h,w,c]
-        """
         out = self.net(x.permute(0, 3, 1, 2))
         return out.permute(0, 2, 3, 1)
 
@@ -214,10 +185,8 @@ class SST(nn.Module):
         self.dim = dim
         self.scales = len(num_blocks)
 
-        # Input projection
         self.embedding = nn.Conv2d(in_dim, self.dim, 3, 1, 1, bias=False)
 
-        # Encoder
         self.encoder_layers = nn.ModuleList([])
         dim_scale = dim
         for i in range(self.scales-1):
@@ -227,10 +196,8 @@ class SST(nn.Module):
             ]))
             dim_scale *= 2
 
-        # Bottleneck
         self.bottleneck = SSAB(dim=dim_scale, dim_head=dim, heads=dim_scale // dim, num_blocks=num_blocks[-1])
 
-        # Decoder
         self.decoder_layers = nn.ModuleList([])
         for i in range(self.scales-1):
             self.decoder_layers.append(nn.ModuleList([
@@ -241,10 +208,8 @@ class SST(nn.Module):
             ]))
             dim_scale //= 2
 
-        # Output projection
         self.mapping = nn.Conv2d(self.dim, out_dim, 3, 1, 1, bias=False)
 
-        #### activation function
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -257,43 +222,34 @@ class SST(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, x):
-        """
-        x: [b,c,h,w]
-        return out:[b,c,h,w]
-        """
 
         b, c, h_inp, w_inp = x.shape
         hb, wb = 16, 16
-        pad_h = (hb - h_inp % hb) % hb   # 0
-        pad_w = (wb - w_inp % wb) % wb   # 0
-        x = F.pad(x, [0, pad_w, 0, pad_h], mode='reflect')   #F.函数不需要预先定义
+        pad_h = (hb - h_inp % hb) % hb
+        pad_w = (wb - w_inp % wb) % wb
+        x = F.pad(x, [0, pad_w, 0, pad_h], mode='reflect')
 
-        # Embedding
-        fea = self.embedding(x)   #[b,28,256,256]
-        x = x[:,:28,:,:]          #[b,28,256,256]
+        fea = self.embedding(x)
+        x = x[:,:28,:,:]
 
-        # Encoder
         fea_encoder = []
         for (SSAB, FeaDownSample) in self.encoder_layers:
             fea = SSAB(fea)
             fea_encoder.append(fea)
             fea = FeaDownSample(fea)
 
-        # Bottleneck
         fea = self.bottleneck(fea)
 
-        # Decoder
         for i, (FeaUpSample, Fution, SSAB) in enumerate(self.decoder_layers):
             fea = FeaUpSample(fea)
             fea = Fution(torch.cat([fea, fea_encoder[self.scales-2-i]], dim=1))
             fea = SSAB(fea)
 
-        # Mapping
         out = self.mapping(fea) + x
         return out[:, :, :h_inp, :w_inp]
 
 class QECNet(nn.Module):
-    def __init__(self, in_nc=28, out_nc=5, channel=64):   #out_nc = num*2  --> out_nc = num
+    def __init__(self, in_nc=28, out_nc=5, channel=64):
         super(QECNet, self).__init__()
         self.fution = nn.Conv2d(in_nc, channel, 1, 1, 0, bias=True)
         self.down_sample = nn.Conv2d(channel, channel, 3, 1, 1, bias=True)
@@ -308,22 +264,20 @@ class QECNet(nn.Module):
         self.out_nc = out_nc
 
     def forward(self, x):
-        x = self.down_sample(self.relu(self.fution(x)))         # [b,28,256,256]-->[b,64,256,256]-->[b,64,256,256]-->[b,64,256,256]
-        x = self.mlp(x) + 1e-6                                  # [b,64,256,256]-->[b,5,256,256]
+        x = self.down_sample(self.relu(self.fution(x)))
+        x = self.mlp(x) + 1e-6
         return x[:, :, :, :]
 
 
 class CSST(nn.Module):
-    def __init__(self, num_iterations=1):   #num_iterations = 5
+    def __init__(self, num_iterations=1):
         super(CSST, self).__init__()
         self.Render = Measurement_Render()
         self.para_estimator = QECNet(in_nc=28, out_nc=num_iterations)
         self.upsize = nn.ConvTranspose2d(4, 4, 2, stride=2, padding=0, output_padding=0)
         self.up = nn.ConvTranspose2d(3, 3, 2, stride=10, padding=8, output_padding=0)
         self.ff_down = nn.Conv2d(28, 3, 1, stride=1, padding=0)
-        # 512
         self.psf_down_512 = nn.Conv2d(28, 3, 2, stride=2, padding=0)
-        # 1024
         self.psf_down_1024 = nn.Conv2d(28, 3, 4, stride=4, padding=0)
         self.fution = nn.Conv2d(7, 28, 1, padding=0, bias=True)
         self.num_iterations = num_iterations
@@ -334,33 +288,25 @@ class CSST(nn.Module):
             )
 
     def initial(self, y, ff_batch, psf_batch):
-        ff_feature = self.ff_down(ff_batch)                 #3
-        # psf_feature = self.psf_down(psf_batch)              #3
+        ff_feature = self.ff_down(ff_batch)
         if psf_batch.shape[3] == 512:
             psf_feature = self.psf_down_512(psf_batch)
         elif psf_batch.shape[3] == 1024:
             psf_feature = self.psf_down_1024(psf_batch)
         else:
             raise AttributeError('ukonwn psf shape')
-        z = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))                               #[b,6,256,256] --> [b,28,256,256]
-        betas = self.para_estimator(self.fution(torch.cat([y, ff_feature, psf_feature], dim=1)))       #[b,28,256,256] --> [b,5,1,1] 其实每个阶段的迭代参数
+        z = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))
+        betas = self.para_estimator(self.fution(torch.cat([y, ff_feature, psf_feature], dim=1)))
         return z, betas, ff_feature, psf_feature
 
     def forward(self, input_cube, ff_batch, psf_batch, imaging_system, y=None):
-        """
-        :param input_cube: [bs, 28, 512, 512]
-        :param ff_batch:   [bs, 28, 256, 256]
-        :param psf_batch:  [bs, 28, 512, 512]
-        :return: z:        [bs, 28, 256, 256]
-        """
         if y == None:
             y = self.Render(input_cube=input_cube, ff_batch=ff_batch, psf_batch=psf_batch,imaging_system=imaging_system)
         z, betas, ff_feature, psf_feature = self.initial(y, ff_batch, psf_batch)
         z = z.contiguous()
         betas = betas.contiguous()
         for i in range(self.num_iterations):
-            beta = betas[:, i:i+1, :, :]          #[b,1,256,256]
+            beta = betas[:, i:i+1, :, :]
             x = z
-            z = self.denoisers[i](torch.cat([x, beta, ff_feature, psf_feature], dim=1)) # [b, 32, 256, 256]
-            # z = z.contiguous()
+            z = self.denoisers[i](torch.cat([x, beta, ff_feature, psf_feature], dim=1))
         return z[:, :, :, :]

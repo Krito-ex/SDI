@@ -62,7 +62,7 @@ def init_psf(psf_path):
 def init_phi_s(filter_function, psf):
     return 0
 
-def torch_psnr(img, ref):  # input [28,256,256]
+def torch_psnr(img, ref):
     img = (img*256).round()
     ref = (ref*256).round()
     nC = img.shape[0]
@@ -72,7 +72,7 @@ def torch_psnr(img, ref):  # input [28,256,256]
         psnr += 10 * torch.log10((255*255)/mse)
     return psnr / nC
 
-def torch_ssim(img, ref):  # input [28,256,256]
+def torch_ssim(img, ref):
     return ssim(torch.unsqueeze(img, 0), torch.unsqueeze(ref, 0))
 
 def time2file_name(time):
@@ -86,7 +86,7 @@ def time2file_name(time):
     return time_filename
 
 def init_input_adis(test_gt, filter_function, psf, crop_size, imaging_system):
-    [bs, C, YH, YW] = test_gt.shape     # 10, 28 , 586, 586
+    [bs, C, YH, YW] = test_gt.shape
     [C, h, w] = filter_function.shape
 
     offset1 = (YH - crop_size) // 2
@@ -116,14 +116,6 @@ def init_input_adis(test_gt, filter_function, psf, crop_size, imaging_system):
 
 @torch.no_grad()
 def Fast_rFFT2d_GPU_batch(DHSI, psf_cube):
-    '''
-    Args:
-        DHSI: [bs, C, H, W]
-        psf_cube: [bs, C, h, w]
-    Returns:
-        output_cube: [bs, C, H, W]
-    not crop
-    '''
     [bs,C,H,W] = DHSI.shape
     [bs,C,h,w] = psf_cube.shape
     if h<1024 or w<1024:   
@@ -132,27 +124,22 @@ def Fast_rFFT2d_GPU_batch(DHSI, psf_cube):
         psf_cube = PSF
     [bs, C, h, w] = psf_cube.shape
     output_cube = torch.zeros([bs, C, H, W], device=DHSI.device)
-    # prepare padding size to accommodate FFT-based convolution
     YH = H + h - 1
     YW = W + w - 1
     YH = 2 ** (int(torch.log2(torch.tensor(YH)))+1)
     YW = 2 ** (int(torch.log2(torch.tensor(YW)))+1)
     for i in range(bs):
-        HSI = DHSI[i]   # [C,H,W]
-        psf = psf_cube[i]   # [C,h,w]
+        HSI = DHSI[i]
+        psf = psf_cube[i]
         HSI_padded = torch.zeros([C, YH, YW], device=HSI.device)
         psf_padded = torch.zeros([C, YH, YW], device=psf.device)
         HSI_padded[:, (YH - H) // 2:(YH - H) // 2 + H, (YW - W) // 2:(YW - W) // 2 + W] = HSI
         psf_padded[:, (YH - h) // 2:(YH - h) // 2 + h, (YW - w) // 2:(YW - w) // 2 + w] = psf
         HSI_fft = torch.fft.rfft2(HSI_padded, s=(YH,YW)).cuda()
         psf_fft = torch.fft.rfft2(psf_padded, s=(YH,YW)).cuda()
-        # Element-wise multiplication in the frequency domain
         conv_result_fft = HSI_fft * psf_fft
-        # inverse FFT to get the convolution result in the spatial domain
         conv_result = torch.fft.irfft2(conv_result_fft)[:,:YH,:YW]
-        # roll
         conv_result = torch.roll(conv_result, shifts=(YH//2, YW//2), dims=(1,2))
-        # crop the result to the valid region
         meas = conv_result[:, YH//2-H//2:YH//2+H//2, YW//2-W//2:YW//2+W//2]
         output_cube[i] = meas.squeeze(0)
     return output_cube
@@ -167,8 +154,7 @@ def Measurement_Render(input_cube, ff_batch, psf_batch, imaging_system):
     filtered_cube = filtered_cube * ff_batch
     Measurement = torch.sum(filtered_cube, dim=1, keepdim=True)
     para = {'ADIS':15, 'DOE-based':4, 'diffuser-based':6}
-    Measurement = Measurement / float(input_cube.shape[1]) * para[imaging_system]  # 4 for DOE    5 for ADIS   6 for diffuser
-    # Measurement = Measurement / float(input_cube.shape[1]) * 4
+    Measurement = Measurement / float(input_cube.shape[1]) * para[imaging_system]
     return Measurement
 
 
@@ -200,15 +186,12 @@ def Net_para_calculate(test_model, H = 256, W = 256, C = 28, N = 1):
     model = test_model.cuda()
     print(model)
     input_cube=None
-    # input_cube = torch.randn((N, C, 512, 512)).cuda()
     ff_batch = torch.randn((N, C, 256, 256)).cuda()
     psf_batch = torch.randn((N, C, 512, 512)).cuda()
     imaging_system = 'diffuser-based'
     y = torch.randn((N,1,256,256)).cuda()
-    # y=None
 
     flops = FlopCountAnalysis(model, (input_cube, ff_batch, psf_batch, imaging_system, y))
-    # flops = FlopCountAnalysis(model,(input_cube, ff_batch, psf_batch, y))
     n_param = sum([p.nelement() for p in model.parameters()])
     print(f'GMac:{flops.total()/(1024*1024*1024)}')
     print(f'Params:{n_param}')
@@ -217,8 +200,7 @@ if __name__ == '__main__':
     os.environ["CUDA_DEVICE_ORDER"] = 'PCI_BUS_ID'
     os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 
-    data_path= '/exp/NAFNet_light/2026_03_22_10_39_57/model/model_epoch_300.pth'
-    model = model_generator('NAFNet_light', pretrained_model_path=data_path)
+    model = model_generator('HSFAUT_3stg')
     
 
 

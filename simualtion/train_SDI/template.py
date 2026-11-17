@@ -1,5 +1,4 @@
 def set_template(args):
-    # Set the templates here
     if args.template.find('mst') >= 0:
         print('continue')
 

@@ -7,8 +7,6 @@ from .model_base import Fast_rFFT2d_GPU_batch, Measurement_Render
 
 
 
-##########################################################################
-## Layer Norm
 
 def to_3d(x):
     return rearrange(x, 'b c h w -> b (h w) c')
@@ -67,8 +65,6 @@ class LayerNorm(nn.Module):
         return to_4d(self.body(to_3d(x)), h, w)
 
 
-##########################################################################
-## Gated-Dconv Feed-Forward Network (GDFN)
 class FeedForward(nn.Module):
     def __init__(self, dim, ffn_expansion_factor, bias):
         super(FeedForward, self).__init__()
@@ -90,8 +86,6 @@ class FeedForward(nn.Module):
         return x
 
 
-##########################################################################
-## Multi-DConv Head Transposed Self-Attention (MDTA)
 class Attention(nn.Module):
     def __init__(self, dim, num_heads, bias):
         super(Attention, self).__init__()
@@ -126,7 +120,6 @@ class Attention(nn.Module):
         return out
 
 
-##########################################################################
 class TransformerBlock(nn.Module):
     def __init__(self, dim, num_heads, ffn_expansion_factor, bias, LayerNorm_type):
         super(TransformerBlock, self).__init__()
@@ -143,8 +136,6 @@ class TransformerBlock(nn.Module):
         return x
 
 
-##########################################################################
-## Overlapped image patch embedding with 3x3 Conv
 class OverlapPatchEmbed(nn.Module):
     def __init__(self, in_c=3, embed_dim=48, bias=False):
         super(OverlapPatchEmbed, self).__init__()
@@ -157,11 +148,6 @@ class OverlapPatchEmbed(nn.Module):
         return x
 
 def pixel_unshuffle(input, downscale_factor):
-    '''
-    input: batchSize * c * k*w * k*h
-    downscale_factor: k
-    batchSize * c * k*w * k*h -> batchSize * k*k*c * w * h
-    '''
     c = input.shape[1]
     kernel = torch.zeros(size = [downscale_factor * downscale_factor * c, 1, downscale_factor, downscale_factor],
                         device = input.device)
@@ -176,15 +162,8 @@ class PixelUnShuffle(nn.Module):
         self.downscale_factor = downscale_factor
 
     def forward(self, input):
-        '''
-        input: batchSize * c * k*w * k*h
-        downscale_factor: k
-        batchSize * c * k*w * k*h -> batchSize * k*k*c * w * h
-        '''
         return pixel_unshuffle(input, self.downscale_factor)
 
-##########################################################################
-## Resizing modules
 class Downsample(nn.Module):
     def __init__(self, n_feat):
         super(Downsample, self).__init__()
@@ -207,8 +186,6 @@ class Upsample(nn.Module):
         return self.body(x)
 
 
-##########################################################################
-##---------- Restormer -----------------------
 class Restormer(nn.Module):
     def __init__(self,
                  inp_channels=28,
@@ -219,8 +196,8 @@ class Restormer(nn.Module):
                  heads=[1, 2, 4, 8],
                  ffn_expansion_factor=2.66,
                  bias=False,
-                 LayerNorm_type='WithBias',  ## Other option 'BiasFree'
-                 dual_pixel_task=True  ## True for dual-pixel defocus deblurring only. Also set inp_channels=6
+                 LayerNorm_type='WithBias',
+                 dual_pixel_task=True
                  ):
 
         super(Restormer, self).__init__()
@@ -231,34 +208,34 @@ class Restormer(nn.Module):
             TransformerBlock(dim=dim, num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor, bias=bias,
                              LayerNorm_type=LayerNorm_type) for i in range(num_blocks[0])])
 
-        self.down1_2 = Downsample(dim)  ## From Level 1 to Level 2
+        self.down1_2 = Downsample(dim)
         self.encoder_level2 = nn.Sequential(*[
             TransformerBlock(dim=int(dim * 2 ** 1), num_heads=heads[1], ffn_expansion_factor=ffn_expansion_factor,
                              bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[1])])
 
-        self.down2_3 = Downsample(int(dim * 2 ** 1))  ## From Level 2 to Level 3
+        self.down2_3 = Downsample(int(dim * 2 ** 1))
         self.encoder_level3 = nn.Sequential(*[
             TransformerBlock(dim=int(dim * 2 ** 2), num_heads=heads[2], ffn_expansion_factor=ffn_expansion_factor,
                              bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[2])])
 
-        self.down3_4 = Downsample(int(dim * 2 ** 2))  ## From Level 3 to Level 4
+        self.down3_4 = Downsample(int(dim * 2 ** 2))
         self.latent = nn.Sequential(*[
             TransformerBlock(dim=int(dim * 2 ** 3), num_heads=heads[3], ffn_expansion_factor=ffn_expansion_factor,
                              bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[3])])
 
-        self.up4_3 = Upsample(int(dim * 2 ** 3))  ## From Level 4 to Level 3
+        self.up4_3 = Upsample(int(dim * 2 ** 3))
         self.reduce_chan_level3 = nn.Conv2d(int(dim * 2 ** 3), int(dim * 2 ** 2), kernel_size=1, bias=bias)
         self.decoder_level3 = nn.Sequential(*[
             TransformerBlock(dim=int(dim * 2 ** 2), num_heads=heads[2], ffn_expansion_factor=ffn_expansion_factor,
                              bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[2])])
 
-        self.up3_2 = Upsample(int(dim * 2 ** 2))  ## From Level 3 to Level 2
+        self.up3_2 = Upsample(int(dim * 2 ** 2))
         self.reduce_chan_level2 = nn.Conv2d(int(dim * 2 ** 2), int(dim * 2 ** 1), kernel_size=1, bias=bias)
         self.decoder_level2 = nn.Sequential(*[
             TransformerBlock(dim=int(dim * 2 ** 1), num_heads=heads[1], ffn_expansion_factor=ffn_expansion_factor,
                              bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[1])])
 
-        self.up2_1 = Upsample(int(dim * 2 ** 1))  ## From Level 2 to Level 1  (NO 1x1 conv to reduce channels)
+        self.up2_1 = Upsample(int(dim * 2 ** 1))
 
         self.decoder_level1 = nn.Sequential(*[
             TransformerBlock(dim=int(dim * 2 ** 1), num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor,
@@ -268,44 +245,31 @@ class Restormer(nn.Module):
             TransformerBlock(dim=int(dim * 2 ** 1), num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor,
                              bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_refinement_blocks)])
 
-        #### For Dual-Pixel Defocus Deblurring Task ####
         self.dual_pixel_task = dual_pixel_task
         if self.dual_pixel_task:
             self.skip_conv = nn.Conv2d(dim, int(dim * 2 ** 1), kernel_size=1, bias=bias)
-        ###########################
 
         self.output = nn.Conv2d(int(dim * 2 ** 1), out_channels, kernel_size=3, stride=1, padding=1, bias=bias)
 
 
-        # render
         self.Render = Measurement_Render()
-        # add
         self.ff_down = nn.Conv2d(28, 3, 1, stride=1, padding=0)
-        # 512
         self.psf_down_512 = nn.Conv2d(28, 3, 2, stride=2, padding=0)
-        # 1024
         self.psf_down_1024 = nn.Conv2d(28, 3, 4, stride=4, padding=0)
         self.fution = nn.Conv2d(7, 28, 1, padding=0, bias=True)
 
     def initial(self, y, ff_batch, psf_batch):
-        ff_feature = self.ff_down(ff_batch)  # 3
-        # psf_feature = self.psf_down(psf_batch)  # 3
+        ff_feature = self.ff_down(ff_batch)
         if psf_batch.shape[3] == 512:
             psf_feature = self.psf_down_512(psf_batch)
         elif psf_batch.shape[3] == 1024:
             psf_feature = self.psf_down_1024(psf_batch)
         else:
             raise AttributeError('ukonwn psf shape')
-        z = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))  # [b,7,256,256] --> [b,28,256,256]
+        z = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))
         return z
 
     def forward(self, input_cube, ff_batch, psf_batch, imaging_system, y=None):
-        """
-        :param input_cube: [bs, 28, 512, 512]
-        :param ff_batch:   [bs, 28, 256, 256]
-        :param psf_batch:  [bs, 28, 512, 512]
-        :return: z:        [bs, 28, 256, 256]
-        """
         if y == None:
             y = self.Render(input_cube=input_cube, ff_batch=ff_batch, psf_batch=psf_batch, imaging_system=imaging_system)
         inp_img = self.initial(y, ff_batch, psf_batch)
@@ -338,11 +302,9 @@ class Restormer(nn.Module):
 
         out_dec_level1 = self.refinement(out_dec_level1)
 
-        #### For Dual-Pixel Defocus Deblurring Task ####
         if self.dual_pixel_task:
             out_dec_level1 = out_dec_level1 + self.skip_conv(inp_enc_level1)
             out_dec_level1 = self.output(out_dec_level1)
-        ###########################
         else:
             out_dec_level1 = self.output(out_dec_level1) + inp_img
 

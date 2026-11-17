@@ -25,17 +25,17 @@ def model_generator(method, pretrained_model_path=None):
     elif method == 'lambda_net':
         model = Lambda_Net(out_ch=28).cuda()
     elif 'CSST' in method:
-        num_iterations = int(method.split('_')[1][0])  #5
+        num_iterations = int(method.split('_')[1][0])
         model = CSST(num_iterations=num_iterations).cuda()
     elif 'HSFAUT' in method:
         if 'Ablation' in method:
             print('Ablation study on HSFAUT')
         else:
             if 'HSFAUT' in method:
-                num_iterations = int(method.split('_')[1][0])  # 5
+                num_iterations = int(method.split('_')[1][0])
                 model = HSFAUT(in_channels=28, out_channels=28, n_feat=28, num_iterations=num_iterations).cuda()
             else:
-                num_iterations = int(method.split('_')[1][0])  # 5
+                num_iterations = int(method.split('_')[1][0])
                 model = HSFAUT(in_channels=28, out_channels=28, n_feat=28, num_iterations=num_iterations).cuda()
 
     elif 'restormer' in method:
@@ -43,9 +43,9 @@ def model_generator(method, pretrained_model_path=None):
     elif 'fftformer' in method:
         model = fftformer(inp_channels=28, out_channels=28).cuda()
     elif method == 'NAFNet':
-        model = NAFNet(img_channel=28, width=64, middle_blk_num=1, enc_blk_nums=[1,1,1,28], dec_blk_nums=[1,1,1,1]).cuda()  # 64和原文设置保持一致
+        model = NAFNet(img_channel=28, width=64, middle_blk_num=1, enc_blk_nums=[1,1,1,28], dec_blk_nums=[1,1,1,1]).cuda()
     elif method == 'NAFNet_light':
-        model = NAFNet(img_channel=28, width=32, middle_blk_num=12, enc_blk_nums=[2, 2, 4, 8], dec_blk_nums=[2, 2, 2, 2]).cuda()  # 32和原文设置保持一致
+        model = NAFNet(img_channel=28, width=32, middle_blk_num=12, enc_blk_nums=[2, 2, 4, 8], dec_blk_nums=[2, 2, 2, 2]).cuda()
 
     elif 'mprnet' in method:
         model = MPRNet(in_c=28, out_c=28,  n_feat=28).cuda()
@@ -60,6 +60,4 @@ def model_generator(method, pretrained_model_path=None):
         checkpoint = torch.load(pretrained_model_path)
         model.load_state_dict({k: v for k, v in checkpoint.items()},
                               strict=True)
-    # if method == 'hdnet':
-    #     return model, fdl_loss
     return model

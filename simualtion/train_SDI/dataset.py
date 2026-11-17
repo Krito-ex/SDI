@@ -9,14 +9,12 @@ class dataset(tud.Dataset):
     def __init__(self, opt, train_data1, train_data2):
         super(dataset, self).__init__()
         self.isTrain = opt.isTrain
-        self.size = opt.size                 # 256
-        self.crop_szie = opt.crop_size       # 256
+        self.size = opt.size
+        self.crop_szie = opt.crop_size
         self.batch_size = opt.batch_size
         self.train_data1 = train_data1
         self.train_data2 = train_data2
         self.imaging_system = opt.imaging_system
-        # self.filter_function = filter_function
-        # self.psf = psf
         if self.isTrain == True:
             self.num = opt.trainset_num
             self.arguement = True
@@ -34,30 +32,19 @@ class dataset(tud.Dataset):
         return gt_batch
 
 
-    def Arguement(slef, x):  # processed_data[i]：（28,512,512）
-        """
-        :param x: c,h,w
-        :return: c,h,w
-        """
+    def Arguement(slef, x):
         rotTimes = random.randint(0, 3)
         vFlip = random.randint(0, 1)
         hFlip = random.randint(0, 1)
-        # Random rotation
         for j in range(rotTimes):
             x = np.rot90(x, axes=(1, 2))  
-        # Random vertical Flip
         for j in range(vFlip):
             x = np.flip(x, axis=(2,))  
-        # Random horizontal Flip
         for j in range(hFlip):
             x = np.flip(x, axis=(1,))  
         return x
 
-    def Arguement2(slef, x):  # processed_data[i]：（4,28,256,256）
-        """
-        :param x: 4,c,h,w
-        :return: c,2h,2w
-        """
+    def Arguement2(slef, x):
         c, h, w = x[0].shape
         H, W = 2*h, 2*w
         output = np.zeros((c,H,W), dtype=np.float32)
@@ -111,7 +98,7 @@ class dataset(tud.Dataset):
         if self.isTrain == True:
             train_data1 = self.train_data1
             train_data2 = self.train_data2
-            gt_batch = self.Shuffle_Crop(train_data1, train_data2)      # (28,512, 512)
+            gt_batch = self.Shuffle_Crop(train_data1, train_data2)
             input_cube, gt_cube = self.init_input_adis(gt_batch)
 
             input_cube = torch.FloatTensor(input_cube.copy())
@@ -120,5 +107,5 @@ class dataset(tud.Dataset):
 
 
     def __len__(self):
-        return self.num   #1250 or 5000
+        return self.num
 

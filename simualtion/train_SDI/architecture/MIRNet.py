@@ -1,4 +1,3 @@
-# --- Imports --- #
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -27,7 +26,6 @@ class downsamp(nn.Module):
         self.off = int((self.stride-1)/2.)
         self.channels = channels
 
-        # print('Filter size [%i]'%filt_size)
         if(self.filt_size==1):
             a = np.array([1.,])
         elif(self.filt_size==2):
@@ -58,7 +56,6 @@ class downsamp(nn.Module):
         else:
             return F.conv2d(self.pad(inp), self.filt, stride=self.stride, groups=inp.shape[1])
 
-##########################################################################
 
 def conv(in_channels, out_channels, kernel_size, bias=False, padding=1, stride=1):
     return nn.Conv2d(
@@ -66,8 +63,6 @@ def conv(in_channels, out_channels, kernel_size, bias=False, padding=1, stride=1
         padding=(kernel_size // 2), bias=bias, stride=stride)
 
 
-##########################################################################
-##---------- Selective Kernel Feature Fusion (SKFF) ----------
 class SKFF(nn.Module):
     def __init__(self, in_channels, height=3, reduction=8, bias=False):
         super(SKFF, self).__init__()
@@ -98,17 +93,14 @@ class SKFF(nn.Module):
         attention_vectors = [fc(feats_Z) for fc in self.fcs]
         attention_vectors = torch.cat(attention_vectors, dim=1)
         attention_vectors = attention_vectors.view(batch_size, self.height, n_feats, 1, 1)
-        # stx()
         attention_vectors = self.softmax(attention_vectors)
 
         feats_V = torch.sum(inp_feats * attention_vectors, dim=1)
 
         return feats_V
 
-    ##########################################################################
 
 
-##---------- Spatial Attention ----------
 class BasicConv(nn.Module):
     def __init__(self, in_planes, out_planes, kernel_size, stride=1, padding=0, dilation=1, groups=1, relu=True,
                  bn=False, bias=False):
@@ -140,21 +132,16 @@ class spatial_attn_layer(nn.Module):
         self.spatial = BasicConv(2, 1, kernel_size, stride=1, padding=(kernel_size - 1) // 2, relu=False)
 
     def forward(self, x):
-        # import pdb;pdb.set_trace()
         x_compress = self.compress(x)
         x_out = self.spatial(x_compress)
-        scale = torch.sigmoid(x_out)  # broadcasting
+        scale = torch.sigmoid(x_out)
         return x * scale
 
 
-##########################################################################
-## ------ Channel Attention --------------
 class ca_layer(nn.Module):
     def __init__(self, channel, reduction=8, bias=True):
         super(ca_layer, self).__init__()
-        # global average pooling: feature --> point
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        # feature channel downscale and upscale --> channel weight
         self.conv_du = nn.Sequential(
             nn.Conv2d(channel, channel // reduction, 1, padding=0, bias=bias),
             nn.ReLU(inplace=True),
@@ -168,8 +155,6 @@ class ca_layer(nn.Module):
         return x * y
 
 
-##########################################################################
-##---------- Dual Attention Unit (DAU) ----------
 class DAU(nn.Module):
     def __init__(
             self, n_feat, kernel_size=3, reduction=8,
@@ -178,10 +163,8 @@ class DAU(nn.Module):
         modules_body = [conv(n_feat, n_feat, kernel_size, bias=bias), act, conv(n_feat, n_feat, kernel_size, bias=bias)]
         self.body = nn.Sequential(*modules_body)
 
-        ## Spatial Attention
         self.SA = spatial_attn_layer()
 
-        ## Channel Attention
         self.CA = ca_layer(n_feat, reduction, bias=bias)
 
         self.conv1x1 = nn.Conv2d(n_feat * 2, n_feat, kernel_size=1, bias=bias)
@@ -196,8 +179,6 @@ class DAU(nn.Module):
         return res
 
 
-##########################################################################
-##---------- Resizing Modules ----------
 class ResidualDownSample(nn.Module):
     def __init__(self, in_channels, bias=False):
         super(ResidualDownSample, self).__init__()
@@ -274,8 +255,6 @@ class UpSample(nn.Module):
         return x
 
 
-##########################################################################
-##---------- Multi-Scale Resiudal Block (MSRB) ----------
 class MSRB(nn.Module):
     def __init__(self, n_feat, height, width, stride, bias):
         super(MSRB, self).__init__()
@@ -314,7 +293,6 @@ class MSRB(nn.Module):
 
     def forward(self, x):
         inp = x.clone()
-        # col 1 only
         blocks_out = []
         for j in range(self.height):
             if j == 0:
@@ -323,11 +301,7 @@ class MSRB(nn.Module):
                 inp = self.blocks[j][0](self.down[f'{inp.size(1)}_{2}'](inp))
             blocks_out.append(inp)
 
-        # rest of grid
         for i in range(1, self.width):
-            # Mesh
-            # Replace condition(i%2!=0) with True(Mesh) or False(Plain)
-            # if i%2!=0:
             if True:
                 tmp = []
                 for j in range(self.height):
@@ -338,14 +312,11 @@ class MSRB(nn.Module):
 
                     selective_kernel_fusion = self.selective_kernel[j](TENSOR)
                     tmp.append(selective_kernel_fusion)
-            # Plain
             else:
                 tmp = blocks_out
-            # Forward through either mesh or plain
             for j in range(self.height):
                 blocks_out[j] = self.blocks[j][i](tmp[j])
 
-        # Sum after grid
         out = []
         for k in range(self.height):
             out.append(self.select_last_up(blocks_out[k], k))
@@ -374,8 +345,6 @@ class MSRB(nn.Module):
             return self.last_up[f'{k}'](tensor)
 
 
-##########################################################################
-##---------- Recursive Residual Group (RRG) ----------
 class RRG(nn.Module):
     def __init__(self, n_feat, n_MSRB, height, width, stride, bias=False):
         super(RRG, self).__init__()
@@ -388,8 +357,6 @@ class RRG(nn.Module):
         res += x
         return res
 
-##########################################################################
-##---------- MIRNet  -----------------------
 class MIRNet(nn.Module):
     def __init__(self, in_channels=28, out_channels=28, n_feat=28, kernel_size=3, stride=2, n_RRG=2, n_MSRB=1, height=3,
                  width=1, bias=False):
@@ -403,35 +370,24 @@ class MIRNet(nn.Module):
 
         self.conv_out = nn.Conv2d(n_feat, out_channels, kernel_size=kernel_size, padding=(kernel_size - 1) // 2,
                                   bias=bias)
-        # render
         self.Render = Measurement_Render()
-        # add
         self.ff_down = nn.Conv2d(28, 3, 1, stride=1, padding=0)
-        # 512
         self.psf_down_512 = nn.Conv2d(28, 3, 2, stride=2, padding=0)
-        # 1024
         self.psf_down_1024 = nn.Conv2d(28, 3, 4, stride=4, padding=0)
         self.fution = nn.Conv2d(7, 28, 1, padding=0, bias=True)
 
     def initial(self, y, ff_batch, psf_batch):
-        ff_feature = self.ff_down(ff_batch)  # 3
-        # psf_feature = self.psf_down(psf_batch)  # 3
+        ff_feature = self.ff_down(ff_batch)
         if psf_batch.shape[3] == 512:
             psf_feature = self.psf_down_512(psf_batch)
         elif psf_batch.shape[3] == 1024:
             psf_feature = self.psf_down_1024(psf_batch)
         else:
             raise AttributeError('ukonwn psf shape')
-        z = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))  # [b,7,256,256] --> [b,28,256,256]
+        z = self.fution(torch.cat([y, ff_feature, psf_feature], dim=1))
         return z
 
     def forward(self, input_cube, ff_batch, psf_batch, imaging_system, y=None):
-        """
-        :param input_cube: [bs, 28, 512, 512]
-        :param ff_batch:   [bs, 28, 256, 256]
-        :param psf_batch:  [bs, 28, 512, 512]
-        :return: z:        [bs, 28, 256, 256]
-        """
         if y==None:
             y = self.Render(input_cube=input_cube, ff_batch=ff_batch, psf_batch=psf_batch, imaging_system=imaging_system)
         z = self.initial(y, ff_batch, psf_batch)
