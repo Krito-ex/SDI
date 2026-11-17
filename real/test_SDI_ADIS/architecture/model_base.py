@@ -1,0 +1,56 @@
+import torch
+import torch.nn as nn
+
+
+def Fast_rFFT2d_GPU_batch(DHSI, psf_cube):
+    [bs,C,H,W] = DHSI.shape
+    [bs,C,h,w] = psf_cube.shape
+    if h<1024 or w<1024:
+        PSF = torch.zeros((bs, C, 1024, 1024), dtype=psf_cube.dtype, device=psf_cube.device)
+        PSF[:, :, (1024 - h) // 2:(1024 - h) // 2 + h, (1024 - w) // 2:(1024 - w) // 2 + w] = psf_cube
+        psf_cube = PSF
+    [bs, C, h, w] = psf_cube.shape
+    output_cube = torch.zeros([bs, C, H, W], device=DHSI.device)
+    YH = H + h - 1
+    YW = W + w - 1
+    YH = 2 ** (int(torch.log2(torch.tensor(YH)))+1)
+    YW = 2 ** (int(torch.log2(torch.tensor(YW)))+1)
+    for i in range(bs):
+        HSI = DHSI[i]
+        psf = psf_cube[i]
+        HSI_padded = torch.zeros([C, YH, YW], device=HSI.device)
+        psf_padded = torch.zeros([C, YH, YW], device=psf.device)
+        HSI_padded[:, (YH - H) // 2:(YH - H) // 2 + H, (YW - W) // 2:(YW - W) // 2 + W] = HSI
+        psf_padded[:, (YH - h) // 2:(YH - h) // 2 + h, (YW - w) // 2:(YW - w) // 2 + w] = psf
+        HSI_fft = torch.fft.rfft2(HSI_padded, s=(YH,YW)).cuda()
+        psf_fft = torch.fft.rfft2(psf_padded, s=(YH,YW)).cuda()
+        conv_result_fft = HSI_fft * psf_fft
+        conv_result = torch.fft.irfft2(conv_result_fft)[:,:YH,:YW]
+        conv_result = torch.roll(conv_result, shifts=(YH//2, YW//2), dims=(1,2))
+        meas = conv_result[:, YH//2-H//2:YH//2+H//2, YW//2-W//2:YW//2+W//2]
+        output_cube[i] = meas.squeeze(0)
+    return output_cube
+
+
+class Measurement_Render(nn.Module):
+    def __init__(self):
+        super(Measurement_Render, self).__init__()
+
+    def forward(self, input_cube, ff_batch, psf_batch):
+        conv_cube = Fast_rFFT2d_GPU_batch(input_cube, psf_batch)
+        size = ff_batch.shape[2]
+        crop_size = input_cube.shape[2]
+        spa_offset = (crop_size - size) // 2
+        filtered_cube = conv_cube[:, :, spa_offset:spa_offset+size, spa_offset:spa_offset+size]
+        filtered_cube = filtered_cube * ff_batch
+        Measurement = torch.sum(filtered_cube, dim=1, keepdim=True)
+        Measurement = Measurement / float(input_cube.shape[1]) * 2.2
+
+        QE, bit = 0.8, 4096
+        meas_Bayer = (Measurement * bit / QE).to(torch.int)
+        n_trials = meas_Bayer.to(torch.float32)
+        p_success = torch.full_like(n_trials, QE)
+        binomial_distribution = torch.distributions.Binomial(n_trials, p_success)
+        noisy_measurement = binomial_distribution.sample()
+        noisy_measurement = noisy_measurement.float() / float(bit)
+        return noisy_measurement
