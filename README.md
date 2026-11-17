@@ -117,7 +117,7 @@ Training `.mat` files contain `img_expand` (scaled by `65536` in the loader) or 
 
 Simulation uses `New-200um-512-0.5.npy`, `DOE_psf_450-650-28.npy`, or `diffuser_psf_450-650-28.npy`, together with `filter_function_450-650-28.npy` (or `diffuser_filter_function_450-650-28.npy` for the diffuser). PSF arrays are stored in `28 x H x W` order.
 
-The included real-system PSFs are `real/test_SDI_ADIS/Real_PSF/1350-200um-1024-0.5.npy` and `DOE_raw512_slim.mat` in the DOE training/testing directories' `real_PSF/` folders. Sample ADIS raw measurements and dark frames are in `real/test_SDI_ADIS/real_capture/2025-03-27/`; DOE cropped measurements are in `real/test_SDI_DOE/real_capture/SDI_real_capture_croped/`.
+The included real-system PSFs are `real/test_SDI_ADIS/Real_PSF/1350-200um-1024-0.5.npy` and `DOE_raw512_slim.mat` in the DOE training/testing directories' `real_PSF/` folders. Sample ADIS raw measurements and dark frames are in `real/test_SDI_ADIS/real_capture/`; DOE cropped measurements are in `real/test_SDI_DOE/real_capture/`.
 
 For full protocol details, see the [paper](https://arxiv.org/abs/2511.06751), especially **Section IV-A (Simulation Experiment Setup)** and **Section V (Real Experiment)**.
 
