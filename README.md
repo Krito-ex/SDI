@@ -1,3 +1,125 @@
 # A toolkit for solving spectral deconvolution imaging (SDI) inverse problems
-## Currently being updated
-### open source of "Hierarchical Spatial-Frequency Aggregation for Spectral Deconvolution Imaging" (under review).
+
+[![Paper](https://img.shields.io/badge/Paper-arXiv%3A2511.06751-b31b1b.svg)](https://arxiv.org/abs/2511.06751)
+[![Publication](https://img.shields.io/badge/IEEE%20TPAMI-Accepted-0077b5.svg)](https://arxiv.org/abs/2511.06751)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+Official research code repository for **"Hierarchical Spatial-Frequency Aggregation for Spectral Deconvolution Imaging"**, accepted for publication in **IEEE Transactions on Pattern Analysis and Machine Intelligence (TPAMI)**.
+
+**Authors:** Tao Lv, Daoming Zhou, Chenglong Huang, Chongde Zi, Linsen Chen, and Xun Cao.
+
+**Paper:** [arXiv:2511.06751](https://arxiv.org/abs/2511.06751)  
+**Code:** [github.com/Krito-ex/SDI](https://github.com/Krito-ex/SDI)
+
+> **Release status:** This repository is being updated. The public code currently includes simulation/training resources and Python visualization utilities. Detailed, verified training/inference commands and pretrained-model links will be documented as they become available.
+
+## Overview
+
+**Spectral deconvolution imaging (SDI)** is a computational spectral imaging paradigm that uses wavelength-dependent point spread functions (PSFs) to encode a hyperspectral scene into a compact sensor measurement. Recovering the spectral image requires solving an ill-posed inverse problem involving convolution, spatially varying filtering, and spectral integration.
+
+To address the challenges of scene-dependent reconstruction operators, we introduce:
+
+- **HSFAUF — Hierarchical Spatial-Frequency Aggregation Unfolding Framework:** a physics-informed, deep-unfolding framework that separates filtering and convolution subproblems and exploits their structure in complementary computational domains.
+- **SFAT — Spatial-Frequency Aggregation Transformer:** a learned prior module that aggregates spatial and frequency-domain information to refine the reconstruction.
+- **HSFAUT — Hierarchical Spatial-Frequency Aggregation Unfolding Transformer:** the complete reconstruction network obtained by integrating SFAT into HSFAUF.
+
+The paper evaluates HSFAUT on **amplitude-encoded, phase-encoded, and scattering-encoded** SDI systems, including both simulated measurements and real-world captures.
+
+## Highlights
+
+- **Physics-guided reconstruction:** incorporates the SDI forward model into an interpretable unfolding architecture.
+- **Hierarchical optimization:** addresses filtering and convolution through complementary spatial- and frequency-domain updates.
+- **Cross-domain feature aggregation:** combines spatial detail with frequency-domain information through SFAT.
+- **Versatility across optical encoders:** applies to SDI systems with different wavelength-dependent PSFs.
+- **Efficient spectral recovery:** achieves competitive reconstruction quality with reduced computational and model complexity, as demonstrated in the paper.
+
+## Repository Structure
+
+```text
+SDI/
+├── simualtion/
+│   └── train_SDI/              # Simulation / SDI training resources
+├── visualization_tools_python/ # Python visualization utilities
+├── LICENSE                     # MIT license
+└── README.md
+```
+
+**Note:** `simualtion/` is the directory name currently used in this repository (including its spelling).
+
+## Getting Started
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/Krito-ex/SDI.git
+cd SDI
+```
+
+### 2. Set up the Python environment
+
+The experiments described in the paper are implemented in **PyTorch**. A CUDA-capable GPU is recommended for network training.
+
+Install a PyTorch build compatible with your hardware using the [official installation instructions](https://pytorch.org/get-started/locally/), then install the additional packages imported by the scripts you intend to run.
+
+> A pinned, repository-wide dependency specification is not currently provided at the top level. Please check the relevant scripts before choosing package versions; do not assume a particular Python, CUDA, or PyTorch version has been validated for this release.
+
+### 3. Locate the training code
+
+```bash
+cd simualtion/train_SDI
+```
+
+Before running an experiment, inspect the available entry-point scripts and update dataset paths, PSF/filter paths, output directories, and other experiment-specific settings as needed. Exact commands will be added after the released entry points and configurations have been verified.
+
+## Datasets and Experimental Setup
+
+The paper uses the following hyperspectral datasets for simulation experiments:
+
+| Dataset | Use in the paper |
+| --- | --- |
+| **CAVE-1024** | Training |
+| **KAIST** | 20 scenes for training; 10 scenes for testing |
+
+The simulation protocol follows these settings:
+
+- **Spectral sampling:** 28 bands spanning **450–650 nm**, generated by spectral interpolation.
+- **SDI encoding configurations:** amplitude-coded, phase-coded (diffractive optical element), and scattering-coded (diffuser-based).
+- **PSF size used in the unified benchmark:** `512 × 512 × 28`.
+- **Filtering-function size:** `256 × 256 × 28`.
+- **Training described in the paper:** PyTorch, Adam optimizer, cosine-annealing schedule, 300 epochs; experiments were performed on an NVIDIA RTX 4090D GPU.
+
+Obtain the datasets from their respective providers and follow their usage terms. The appropriate wavelength-dependent PSFs and filtering functions must be supplied for the optical system under evaluation. Paths, file formats, and preprocessing should be matched to the corresponding code before attempting reproduction.
+
+For full protocol details, see the [paper](https://arxiv.org/abs/2511.06751), especially **Section IV-A (Simulation Experiment Setup)** and **Section V (Real Experiment)**.
+
+## Training, Evaluation, and Visualization
+
+- **Training / simulation:** see [`simualtion/train_SDI/`](simualtion/train_SDI/).
+- **Visualization tools:** see [`visualization_tools_python/`](visualization_tools_python/).
+- **Evaluation:** the paper reports **PSNR**, **SSIM**, and **spectral angle mapper (SAM)** for spectral reconstruction quality.
+
+**Documentation in progress:** Specific commands for training, checkpoint-based inference, quantitative evaluation, and visualization are not yet listed here because their runnable entry points and required arguments have not been verified against the current public release. This section will be updated alongside the code.
+
+## Citation
+
+If this repository or HSFAUT is useful in your research, please cite our paper:
+
+```bibtex
+@article{lv2026hierarchical,
+  title   = {Hierarchical Spatial-Frequency Aggregation for Spectral Deconvolution Imaging},
+  author  = {Lv, Tao and Zhou, Daoming and Huang, Chenglong and Zi, Chongde and Chen, Linsen and Cao, Xun},
+  journal = {IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  year    = {2026},
+  note    = {Accepted for publication}
+}
+```
+
+The final IEEE DOI, volume, issue, and page numbers can be added after the official publication record is available. A freely accessible version is available at [arXiv:2511.06751](https://arxiv.org/abs/2511.06751).
+
+## License
+
+This project is released under the [MIT License](LICENSE).
+
+## Questions and Issues
+
+For questions, bug reports, or suggestions, please open a [GitHub Issue](https://github.com/Krito-ex/SDI/issues). When reporting a reproducibility problem, include the script, environment details, and full error message.
